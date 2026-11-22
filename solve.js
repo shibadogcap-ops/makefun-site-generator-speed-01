@@ -35,23 +35,33 @@ function isSpace(code) {
 function countWords(text) {
   let count = 0;
   let inWord = false;
-  for (let i = 0; i < text.length; i++) {
-    const ws = isSpace(text.charCodeAt(i));
+  const n = text.length;
+  for (let i = 0; i < n; i++) {
+    const c = text.charCodeAt(i);
+    // Every JavaScript \s is <= 32 or >= 0xa0; the common ASCII cases decide first.
+    const ws = c === 32 || (c >= 9 && c <= 13) || (c >= 0xa0 && isSpace(c));
     if (!ws && !inWord) count++;
     inWord = !ws;
   }
   return count;
 }
 
-// `rel` resolved against directory `dir`, or null when a ".." climbs past the root.
-function resolvePath(dir, rel) {
-  const parts = dir === '' ? [] : dir.split('/');
-  for (const seg of rel.split('/')) {
-    if (seg === '' || seg === '.') continue;
-    if (seg === '..') {
+// `rel` resolved against the directory segments `base`, or null when a ".." climbs past the root.
+function resolvePath(base, rel) {
+  const parts = base.slice();
+  const n = rel.length;
+  let pos = 0;
+  while (pos <= n) {
+    let e = pos;
+    while (e < n && rel.charCodeAt(e) !== 47) e++;
+    const len = e - pos;
+    if (len === 2 && rel.charCodeAt(pos) === 46 && rel.charCodeAt(pos + 1) === 46) {
       if (parts.length === 0) return null;
       parts.pop();
-    } else parts.push(seg);
+    } else if (len !== 0 && !(len === 1 && rel.charCodeAt(pos) === 46)) {
+      parts.push(rel.slice(pos, e));
+    }
+    pos = e + 1;
   }
   return parts.join('/');
 }
@@ -74,6 +84,15 @@ export function run(input) {
 
   // slugify is pure, so one memo serves titles, tag names and heading-adjacent text.
   const slugMemo = new Map();
+  const dateMemo = new Map();
+  const longDateOf = (d) => {
+    let v = dateMemo.get(d);
+    if (v === undefined) {
+      v = longDate(d);
+      dateMemo.set(d, v);
+    }
+    return v;
+  };
   const slugify = (text) => {
     let s = slugMemo.get(text);
     if (s === undefined) {
@@ -154,13 +173,14 @@ export function run(input) {
   const broken = new Set();
   for (const s of kept) {
     const dir = dirOf(s.path);
+    const dirParts = dir === '' ? [] : dir.split('/');
     const env = {
       link: (target) => {
         if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(target) || target.startsWith('/') || target.startsWith('#')) return target;
         const hash = target.indexOf('#');
         const rel = hash === -1 ? target : target.slice(0, hash);
         const frag = hash === -1 ? '' : target.slice(hash);
-        const path = rel === '' ? null : resolvePath(dir, rel);
+        const path = rel === '' ? null : resolvePath(dirParts, rel);
         if (path !== null && bySource.has(path)) return `${bySource.get(path).url}${frag}`;
         if (path !== null && staticPaths.has(path)) return `${base}/${path}${frag}`;
         broken.add(`broken-link ${s.path} -> ${target}`);
@@ -220,7 +240,7 @@ export function run(input) {
     title: s.data.title,
     url: s.url,
     date: s.data.date ?? '',
-    date_long: s.data.date === undefined ? '' : longDate(s.data.date),
+    date_long: s.data.date === undefined ? '' : longDateOf(s.data.date),
     summary: s.data.summary ?? '',
     excerpt: s.excerpt,
     reading_minutes: Math.max(1, Math.ceil(countWords(s.body) / 200)),
@@ -231,13 +251,13 @@ export function run(input) {
   const linkOf = (s) =>
     s === null || s === undefined
       ? null
-      : { title: s.data.title, url: s.url, date: s.data.date ?? '', date_long: s.data.date === undefined ? '' : longDate(s.data.date) };
+      : { title: s.data.title, url: s.url, date: s.data.date ?? '', date_long: s.data.date === undefined ? '' : longDateOf(s.data.date) };
 
   const pageOf = (s) => ({
-    ...cardOf(s),
+    ...(s.post ? cards.get(s) : cardOf(s)),
     slug: s.slug,
     content: s.html,
-    toc: s.toc.map((h) => ({ level: h.level, id: h.id, html: h.html })),
+    toc: s.toc,
     newer: linkOf(s.newer ?? null),
     older: linkOf(s.older ?? null),
     is_post: s.post,
